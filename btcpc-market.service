@@ -1,0 +1,23 @@
+[Unit]
+Description=BTCPC Market — commerce HTTP service
+After=network.target btcpc-miner.service
+PartOf=btcpc-miner.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/repos/btcpc-market
+ExecStart=%h/repos/btcpc-market/target/release/btcpc-market
+Restart=on-failure
+RestartSec=5
+
+# Inherit data dir from miner default
+Environment=BTCPC_MARKET_PORT=7042
+Environment=BTCPC_DATA_DIR=%h/.btcpc
+
+# JWT secret — override with real secret in ~/.config/systemd/user/btcpc-market.service.d/override.conf
+# [Service]
+# Environment=BTCPC_JWT_SECRET=your-secret-here
+# Environment=JWT_SECRET=your-secret-here
+
+[Install]
+WantedBy=default.target
