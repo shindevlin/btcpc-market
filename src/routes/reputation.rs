@@ -30,6 +30,17 @@ pub async fn vote(
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "target_id required"}))));
     }
 
+    // Verified purchase required for product reviews
+    if body.target_type == "product" {
+        let state = app.state.read();
+        let has_purchased = state.orders.values().any(|o| {
+            o.buyer == voter && o.product_id == body.target_id && o.status == "delivered"
+        });
+        if !has_purchased {
+            return Err((StatusCode::FORBIDDEN, Json(json!({"error": "verified purchase required to review this product"}))));
+        }
+    }
+
     let weight = body.weight.unwrap_or(1).max(1).min(100);
     let epoch = current_epoch();
 

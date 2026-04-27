@@ -75,6 +75,10 @@ pub async fn create_product(
         "image_cid": body.image_cid,
         "inventory": body.inventory,
         "categories": body.categories.unwrap_or_default(),
+        "auto_deliver": body.auto_deliver.unwrap_or(false),
+        "delivery_cid": body.delivery_cid,
+        "sale_price": body.sale_price,
+        "sale_ends_epoch": body.sale_ends_epoch,
     }));
 
     ledger::persist(&app.cfg, &app.state, &entry)
@@ -145,6 +149,10 @@ pub async fn update_product(
         "price": body.price,
         "image_cid": body.image_cid,
         "inventory": body.inventory,
+        "auto_deliver": body.auto_deliver,
+        "delivery_cid": body.delivery_cid,
+        "sale_price": body.sale_price,
+        "sale_ends_epoch": body.sale_ends_epoch,
     }));
 
     ledger::persist(&app.cfg, &app.state, &entry)

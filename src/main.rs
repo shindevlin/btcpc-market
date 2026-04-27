@@ -15,7 +15,7 @@ use axum::{
 };
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, warn};
 
 use app::AppState;
 use config::Config;
@@ -42,6 +42,41 @@ async fn main() -> Result<()> {
     let port = cfg.port;
     let app_state = AppState::new(cfg, state);
 
+    // ── Escrow auto-cancel sweep — runs every 60 s ─────────────────────────────
+    tokio::spawn({
+        let sweep_state = app_state.state.clone();
+        let sweep_cfg   = app_state.cfg.clone();   // Arc<Config>
+        async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let epoch = models::current_epoch();
+                let expired: Vec<(String, String)> = {
+                    let st = sweep_state.read();
+                    st.orders.values()
+                        .filter(|o| {
+                            matches!(o.status.as_str(), "pending" | "placed")
+                                && o.fulfill_deadline_epoch > 0
+                                && epoch > o.fulfill_deadline_epoch
+                        })
+                        .map(|o| (o.order_id.clone(), o.buyer.clone()))
+                        .collect()
+                };
+                for (oid, buyer) in expired {
+                    if buyer.is_empty() { continue; }
+                    let mut entry = models::LedgerEntry::new("ORDER_CANCEL", &buyer, epoch);
+                    entry.order_data = Some(serde_json::json!({
+                        "order_id": oid,
+                        "reason": "fulfill_deadline_expired",
+                    }));
+                    match ledger::persist(&sweep_cfg, &sweep_state, &entry) {
+                        Ok(_) => info!("Escrow sweep: auto-cancelled order {oid} at epoch {epoch}"),
+                        Err(e) => warn!("Escrow sweep: failed to cancel order {oid}: {e}"),
+                    }
+                }
+            }
+        }
+    });
+
     // ── Protected routes — require JWT or posting key ──────────────────────
     let auth_mw = middleware::from_fn_with_state(
         app_state.clone(),
@@ -50,9 +85,13 @@ async fn main() -> Result<()> {
 
     let protected = Router::new()
         // Stores (mutations)
-        .route("/stores",          post(routes::stores::open_store))
-        .route("/stores/:seller",  patch(routes::stores::update_store)
-                                   .delete(routes::stores::close_store))
+        .route("/stores",                              post(routes::stores::open_store))
+        .route("/stores/:seller",                      patch(routes::stores::update_store)
+                                                       .delete(routes::stores::close_store))
+        .route("/stores/:seller/shipping",             post(routes::stores::link_shipping))
+        .route("/stores/:seller/shipping/:carrier",    axum::routing::delete(routes::stores::unlink_shipping))
+        .route("/stores/:seller/tor/setup",            post(routes::stores::tor_setup))
+        .route("/stores/:seller/tor",                  axum::routing::delete(routes::stores::tor_disable))
         // Products (mutations)
         .route("/products",           post(routes::products::create_product))
         .route("/products/*pid",      patch(routes::products::update_product)
@@ -67,6 +106,9 @@ async fn main() -> Result<()> {
         .route("/orders/:oid/dispute",       post(routes::orders::dispute_order))
         // Reputation
         .route("/reputation/vote",    post(routes::reputation::vote))
+        // Q&A (mutations)
+        .route("/products/:seller/:slug/qa",            post(routes::qa::ask_question))
+        .route("/products/:seller/:slug/qa/:qa_id",     patch(routes::qa::answer_question))
         .route_layer(auth_mw);
 
     // ── Public routes — no auth required ──────────────────────────────────
@@ -76,7 +118,9 @@ async fn main() -> Result<()> {
         .route("/products",        get(routes::products::list_products))
         .route("/products/*pid",   get(routes::products::get_product))
         .route("/quote/capacity",  get(routes::stores::quote_capacity))
-        .route("/import/amazon",   post(routes::import::import_amazon));
+        .route("/import/amazon",   post(routes::import::import_amazon))
+        // Q&A (public read)
+        .route("/products/:seller/:slug/qa", get(routes::qa::list_questions));
 
     let commerce = protected.merge(public);
 

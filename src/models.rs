@@ -69,6 +69,14 @@ pub fn current_epoch() -> u64 {
 // ── In-memory state snapshots ─────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ShippingAccount {
+    pub carrier: String,           // "ups" | "fedex" | "usps" | "dhl" | "pirateship" | "other"
+    pub account_id_masked: String, // last 4 chars shown — full id stored only in ledger
+    pub default_service: String,   // "ground" | "2day" | "overnight" | etc.
+    pub linked_at: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Store {
     pub seller: String,
     pub name: String,
@@ -81,6 +89,23 @@ pub struct Store {
     pub status: String, // "active" | "closed"
     pub opened_at: u64,
     pub score: f64,
+    #[serde(default)]
+    pub shipping_accounts: Vec<ShippingAccount>,
+    #[serde(default)]
+    pub tor_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub onion_address: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ProductQA {
+    pub qa_id: String,
+    pub asker: String,
+    pub question: String,
+    pub answer: Option<String>,
+    pub asked_epoch: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answered_epoch: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -96,6 +121,16 @@ pub struct Product {
     pub categories: Vec<String>,
     pub status: String, // "active" | "delisted"
     pub created_epoch: u64,
+    #[serde(default)]
+    pub auto_deliver: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_cid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sale_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sale_ends_epoch: Option<u64>,
+    #[serde(default)]
+    pub questions: Vec<ProductQA>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -112,6 +147,17 @@ pub struct Order {
     pub status: String, // "pending" | "fulfilled" | "delivered" | "cancelled" | "disputed"
     pub fulfillment_cid: Option<String>,
     pub placed_epoch: u64,
+    pub fulfill_deadline_epoch: u64, // placed_epoch + 4800
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shipping_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracking_number: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shipping_service: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shipping_note: Option<String>,
 }
 
 // ── Request bodies ────────────────────────────────────────────────────────────
@@ -144,6 +190,10 @@ pub struct CreateProductRequest {
     pub image_cid: Option<String>,
     pub inventory: Option<u32>,
     pub categories: Option<Vec<String>>,
+    pub auto_deliver: Option<bool>,
+    pub delivery_cid: Option<String>,
+    pub sale_price: Option<f64>,
+    pub sale_ends_epoch: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -153,6 +203,10 @@ pub struct UpdateProductRequest {
     pub price: Option<f64>,
     pub image_cid: Option<String>,
     pub inventory: Option<i64>,
+    pub auto_deliver: Option<bool>,
+    pub delivery_cid: Option<String>,
+    pub sale_price: Option<f64>,
+    pub sale_ends_epoch: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -160,11 +214,33 @@ pub struct PlaceOrderRequest {
     pub product_id: String,
     pub quantity: Option<u32>,
     pub token: Option<String>,
+    pub shipping_address: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct AskQuestionRequest {
+    pub question: String,
+}
+
+#[derive(Deserialize)]
+pub struct AnswerQuestionRequest {
+    pub answer: String,
 }
 
 #[derive(Deserialize)]
 pub struct FulfillOrderRequest {
     pub fulfillment_cid: Option<String>,
+    pub carrier: Option<String>,
+    pub tracking_number: Option<String>,
+    pub shipping_service: Option<String>,
+    pub shipping_note: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct LinkShippingRequest {
+    pub carrier: String,
+    pub account_id: String,
+    pub default_service: Option<String>,
 }
 
 #[derive(Deserialize)]

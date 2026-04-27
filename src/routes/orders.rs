@@ -34,7 +34,7 @@ pub async fn place_order(
     let buyer = user.username;
     let quantity = body.quantity.unwrap_or(1).max(1);
 
-    let (seller, unit_price, token) = {
+    let (seller, unit_price, token, auto_deliver, delivery_cid) = {
         let state = app.state.read();
         let product = state.products.get(&body.product_id)
             .filter(|p| p.status == "active")
@@ -48,10 +48,19 @@ pub async fn place_order(
                 }))));
             }
         }
+
+        // Flash sale: use sale_price if active
+        let effective_price = match (product.sale_price, product.sale_ends_epoch) {
+            (Some(sp), Some(se)) if se > current_epoch() => sp,
+            _ => product.price,
+        };
+
         (
             product.seller.clone(),
-            product.price,
+            effective_price,
             body.token.clone().unwrap_or_else(|| product.token.clone()),
+            product.auto_deliver,
+            product.delivery_cid.clone(),
         )
     };
 
@@ -76,10 +85,26 @@ pub async fn place_order(
         "total": total,
         "token": token,
         "escrow_id": escrow_id,
+        "shipping_address": body.shipping_address,
     }));
 
     ledger::persist(&app.cfg, &app.state, &entry)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+
+    // Auto-deliver digital goods
+    let mut auto_delivered = false;
+    if auto_deliver {
+        if let Some(cid) = delivery_cid {
+            let mut fulfill_entry = LedgerEntry::new("ORDER_FULFILL", &seller, current_epoch());
+            fulfill_entry.order_data = Some(json!({
+                "order_id": order_id,
+                "fulfillment_cid": cid,
+                "auto_delivered": true,
+            }));
+            ledger::persist(&app.cfg, &app.state, &fulfill_entry).ok();
+            auto_delivered = true;
+        }
+    }
 
     Ok(Json(json!({
         "ok": true,
@@ -91,7 +116,8 @@ pub async fn place_order(
         "total": total,
         "token": token,
         "escrow_id": escrow_id,
-        "status": "pending",
+        "status": if auto_delivered { "fulfilled" } else { "pending" },
+        "auto_delivered": auto_delivered,
         "epoch": epoch,
     })))
 }
@@ -152,6 +178,10 @@ pub async fn fulfill_order(
     entry.order_data = Some(json!({
         "order_id": order_id,
         "fulfillment_cid": body.fulfillment_cid,
+        "carrier": body.carrier,
+        "tracking_number": body.tracking_number,
+        "shipping_service": body.shipping_service,
+        "shipping_note": body.shipping_note,
     }));
 
     ledger::persist(&app.cfg, &app.state, &entry)

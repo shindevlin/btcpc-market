@@ -10,7 +10,7 @@ use crate::{
     auth::AuthUser,
     bonding_curve::{capacity_for_payment, cost_for_capacity, stake_for_capacity},
     ledger,
-    models::{current_epoch, LedgerEntry, OpenStoreRequest, PaginationQuery, UpdateStoreRequest, CapacityQuoteRequest},
+    models::{current_epoch, CapacityQuoteRequest, LedgerEntry, LinkShippingRequest, OpenStoreRequest, PaginationQuery, UpdateStoreRequest},
 };
 
 /// POST /api/commerce/stores — open a storefront
@@ -139,6 +139,163 @@ pub async fn close_store(
     ledger::persist(&app.cfg, &app.state, &entry)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     Ok(Json(json!({ "ok": true, "seller": seller })))
+}
+
+/// POST /api/commerce/stores/:seller/tor/setup — configure Tor hidden service for this store
+pub async fn tor_setup(
+    State(app): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path(seller): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if user.username != seller {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "not your store"}))));
+    }
+
+    let base     = std::path::Path::new(&app.cfg.data_dir);
+    let tor_dir  = base.join("market-tor");
+    let hs_dir   = tor_dir.join("hs");
+    let torrc    = tor_dir.join("torrc");
+    let hostname = hs_dir.join("hostname");
+
+    tokio::fs::create_dir_all(&hs_dir).await
+        .map_err(|e: std::io::Error| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+
+    // Tor requires strict permissions on the HS directory (700)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&hs_dir) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o700);
+            let _ = std::fs::set_permissions(&hs_dir, perms);
+        }
+    }
+
+    let torrc_content = format!(
+        "# BTCPC Market hidden service\nHiddenServiceDir {}\nHiddenServicePort 80 127.0.0.1:{}\n",
+        hs_dir.display(), app.cfg.port
+    );
+    tokio::fs::write(&torrc, &torrc_content).await
+        .map_err(|e: std::io::Error| { let _ = e; })
+        .ok();
+
+    // If Tor has already generated the hostname, register it on-chain
+    if let Ok(raw) = tokio::fs::read_to_string(&hostname).await {
+        let onion: String = raw.trim().to_string();
+        if !onion.is_empty() {
+            let epoch = current_epoch();
+            let mut entry = LedgerEntry::new("STORE_UPDATE", &seller, epoch);
+            entry.store_data = Some(json!({
+                "action": "update",
+                "onion_address": onion,
+                "tor_enabled": true,
+            }));
+            ledger::persist(&app.cfg, &app.state, &entry).ok();
+
+            return Ok(Json(json!({
+                "ok": true,
+                "status": "active",
+                "onion_address": onion,
+                "registered_on_chain": true,
+            })));
+        }
+    }
+
+    // Tor not running yet — return config for vendor to apply
+    Ok(Json(json!({
+        "ok": false,
+        "status": "pending_setup",
+        "torrc_path": torrc.display().to_string(),
+        "torrc_content": torrc_content,
+        "hs_dir": hs_dir.display().to_string(),
+        "hostname_path": hostname.display().to_string(),
+        "next_steps": [
+            "Install Tor if needed: sudo apt install tor",
+            format!("Run: tor -f {} --RunAsDaemon 1", torrc.display()),
+            "Wait ~30 seconds for Tor to generate your .onion address",
+            "Then call POST /api/commerce/stores/{seller}/tor/setup again to register it on-chain",
+        ],
+    })))
+}
+
+/// DELETE /api/commerce/stores/:seller/tor — disable Tor routing for this store
+pub async fn tor_disable(
+    State(app): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path(seller): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if user.username != seller {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "not your store"}))));
+    }
+    let epoch = current_epoch();
+    let mut entry = LedgerEntry::new("STORE_UPDATE", &seller, epoch);
+    entry.store_data = Some(json!({ "action": "update", "tor_enabled": false }));
+    ledger::persist(&app.cfg, &app.state, &entry)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    Ok(Json(json!({ "ok": true, "tor_enabled": false })))
+}
+
+const VALID_CARRIERS: &[&str] = &["ups", "fedex", "usps", "dhl", "pirateship", "shipstation", "easypost", "other"];
+
+/// POST /api/commerce/stores/:seller/shipping — link a carrier account
+pub async fn link_shipping(
+    State(app): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path(seller): Path<String>,
+    Json(body): Json<LinkShippingRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if user.username != seller {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "not your store"}))));
+    }
+    {
+        let state = app.state.read();
+        match state.stores.get(&seller) {
+            Some(s) if s.status == "active" => {}
+            _ => return Err((StatusCode::NOT_FOUND, Json(json!({"error": "store not found or closed"})))),
+        }
+    }
+    let carrier = body.carrier.to_lowercase();
+    if !VALID_CARRIERS.contains(&carrier.as_str()) {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "unsupported carrier",
+            "supported": VALID_CARRIERS,
+        }))));
+    }
+    if body.account_id.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "account_id required"}))));
+    }
+    let masked = if body.account_id.len() <= 4 {
+        "*".repeat(body.account_id.len())
+    } else {
+        format!("****{}", &body.account_id[body.account_id.len() - 4..])
+    };
+    let epoch = current_epoch();
+    let mut entry = LedgerEntry::new("STORE_SHIPPING_LINK", &seller, epoch);
+    entry.store_data = Some(json!({
+        "carrier": carrier,
+        "account_id": body.account_id.trim(),
+        "default_service": body.default_service.unwrap_or_else(|| "ground".to_string()),
+    }));
+    ledger::persist(&app.cfg, &app.state, &entry)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    Ok(Json(json!({ "ok": true, "carrier": carrier, "account_id_masked": masked })))
+}
+
+/// DELETE /api/commerce/stores/:seller/shipping/:carrier — unlink a carrier
+pub async fn unlink_shipping(
+    State(app): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path((seller, carrier)): Path<(String, String)>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if user.username != seller {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "not your store"}))));
+    }
+    let epoch = current_epoch();
+    let mut entry = LedgerEntry::new("STORE_SHIPPING_UNLINK", &seller, epoch);
+    entry.store_data = Some(json!({ "carrier": carrier.to_lowercase() }));
+    ledger::persist(&app.cfg, &app.state, &entry)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    Ok(Json(json!({ "ok": true, "carrier": carrier.to_lowercase() })))
 }
 
 /// GET /api/commerce/quote/capacity — bonding curve price quote
