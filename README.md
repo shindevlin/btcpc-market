@@ -75,6 +75,34 @@ All mutations append a signed entry to `$BTCPC_DATA_DIR/pending-entries.jsonl` a
 
 Entry types: `STORE_OPEN`, `STORE_UPDATE`, `STORE_CLOSE`, `STORE_SHIPPING_LINK`, `STORE_SHIPPING_UNLINK`, `PRODUCT_CREATE`, `PRODUCT_UPDATE`, `PRODUCT_DELIST`, `ORDER_PLACE`, `ORDER_FULFILL`, `ORDER_DELIVERED`, `ORDER_CANCEL`, `ORDER_DISPUTE`, `REPUTATION_VOTE`, `PRODUCT_QA_ASK`, `PRODUCT_QA_ANSWER`
 
+## Key management
+
+`btcpc-market` currently operates exclusively with the **posting key**. The posting key is a 64-character hex Ed25519 private key that signs all non-financial ledger entries: store mutations, product listings, order actions, Q&A, and reputation votes.
+
+Two additional keys are defined in the protocol but not yet enforced by this service:
+
+| Key | Purpose | Status |
+|-----|---------|--------|
+| **Posting key** | Signs catalog and order-status entries | Implemented (Phase G) |
+| **Active key** | Signs token transfers — ESCROW_LOCK on ORDER_PLACE, ESCROW_RELEASE on ORDER_DELIVER | Roadmap (Phase H) |
+| **Memo key** | Encrypts/signs buyer-to-seller and seller-to-buyer reputation memos (REPUTATION_MEMO entries) | Roadmap (Phase H) |
+
+Keys never leave the client. `btcpc-market` verifies the posting key signature on every mutating request and rejects entries with invalid signatures before they touch the ledger.
+
+See [Appendix N of the BTCPC whitepaper](https://github.com/shindevlin/btcpc/blob/main/docs/BTCPC_WHITEPAPER.md#appendix-n--key-architecture) for the full key architecture, escrow flow, and buyer staking design.
+
+## Roadmap
+
+The full roadmap lives at [`docs/ROADMAP.md`](https://github.com/shindevlin/btcpc/blob/main/docs/ROADMAP.md) in the main BTCPC repo. Commerce-relevant phases:
+
+| Phase | Description |
+|-------|-------------|
+| **H — Auth & Wallet Integration** | Active key escrow debit/release; memo key reputation memos; buyer staking pool; multi-sig dispute escrow |
+| **I — Discovery & Search** | Full-text product search across all sellers; category browsing; featured stores; real ledger analytics; seller verification badge |
+| **J — Payments & Tokens** | wBTCPC bridge to Ethereum ERC-20; multi-token checkout via bonding curve; discount codes; subscription products; affiliate/referral on-chain entries |
+| **K — Infrastructure & Scale** | Docker Compose single-validator deployment; Kubernetes gateway tier; BTCPC-FS CDN; Telegram order notifications; mobile order tracking in Android app |
+| **L — Governance & Compliance** | On-chain dispute arbitration with staked arbiters; BTCPC Verified Seller program; privacy mode with memo-key-encrypted order data |
+
 ## License
 
 MIT — Shin Devlin / BTCPC Network

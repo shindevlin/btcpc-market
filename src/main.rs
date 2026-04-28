@@ -84,6 +84,8 @@ async fn main() -> Result<()> {
     );
 
     let protected = Router::new()
+        // Media upload (authenticated)
+        .route("/media/upload",  post(routes::media::upload_image))
         // Stores (mutations)
         .route("/stores",                              post(routes::stores::open_store))
         .route("/stores/:seller",                      patch(routes::stores::update_store)
@@ -113,6 +115,8 @@ async fn main() -> Result<()> {
 
     // ── Public routes — no auth required ──────────────────────────────────
     let public = Router::new()
+        .route("/auth/login",      post(routes::auth::login))
+        .route("/media/:hash",     get(routes::media::serve_image))
         .route("/stores",          get(routes::stores::list_stores))
         .route("/stores/:seller",  get(routes::stores::get_store))
         .route("/products",        get(routes::products::list_products))
