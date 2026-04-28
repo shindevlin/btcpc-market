@@ -13,6 +13,7 @@ use crate::{
     models::{
         current_epoch, DisputeOrderRequest, FulfillOrderRequest, LedgerEntry, PlaceOrderRequest,
     },
+    notify,
 };
 
 fn gen_order_id() -> String {
@@ -90,6 +91,17 @@ pub async fn place_order(
 
     ledger::persist(&app.cfg, &app.state, &entry)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+
+    // Telegram notification — fire and forget
+    tokio::spawn(notify::order_placed(
+        app.cfg.clone(),
+        order_id.clone(),
+        body.product_id.clone(),
+        buyer.clone(),
+        seller.clone(),
+        total,
+        quantity as u32,
+    ));
 
     // Auto-deliver digital goods
     let mut auto_delivered = false;

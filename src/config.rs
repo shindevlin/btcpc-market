@@ -4,6 +4,8 @@ pub struct Config {
     pub port: u16,
     pub data_dir: String,
     pub jwt_secret: String,
+    pub telegram_bot_token: Option<String>,
+    pub telegram_chat_id: Option<String>,
 }
 
 impl Config {
@@ -24,7 +26,10 @@ impl Config {
             .or_else(|_| env::var("JWT_SECRET"))
             .unwrap_or_else(|_| "btcpc-dev-secret".to_string());
 
-        Self { port, data_dir, jwt_secret }
+        let telegram_bot_token = env::var("BTCPC_TELEGRAM_BOT_TOKEN").ok();
+        let telegram_chat_id = env::var("BTCPC_TELEGRAM_CHAT_ID").ok();
+
+        Self { port, data_dir, jwt_secret, telegram_bot_token, telegram_chat_id }
     }
 
     pub fn pending_entries_path(&self) -> std::path::PathBuf {

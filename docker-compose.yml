@@ -1,0 +1,25 @@
+services:
+  btcpc-market:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "7042:7042"
+    volumes:
+      - btcpc-data:/data
+    environment:
+      BTCPC_DATA_DIR: /data
+      BTCPC_MARKET_PORT: 7042
+      # Set these in .env or override here:
+      BTCPC_JWT_SECRET: ${BTCPC_JWT_SECRET:-btcpc-dev-secret}
+      BTCPC_TELEGRAM_BOT_TOKEN: ${BTCPC_TELEGRAM_BOT_TOKEN:-}
+      BTCPC_TELEGRAM_CHAT_ID: ${BTCPC_TELEGRAM_CHAT_ID:-}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7042/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  btcpc-data:
+    driver: local

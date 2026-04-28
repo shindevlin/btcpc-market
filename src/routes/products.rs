@@ -99,10 +99,22 @@ pub async fn list_products(
 ) -> Json<Value> {
     let limit = q.limit.unwrap_or(50).min(200);
     let offset = q.offset.unwrap_or(0);
+    let search = q.q.as_deref().unwrap_or("").to_lowercase();
+    let cat_filter = q.category.as_deref().unwrap_or("").to_lowercase();
     let state = app.state.read();
     let mut products: Vec<&crate::models::Product> = state.products.values()
         .filter(|p| p.status == "active")
         .filter(|p| q.seller.as_ref().map(|s| &p.seller == s).unwrap_or(true))
+        .filter(|p| {
+            if search.is_empty() { return true; }
+            p.title.to_lowercase().contains(&search)
+                || p.description.as_deref().unwrap_or("").to_lowercase().contains(&search)
+                || p.seller.to_lowercase().contains(&search)
+        })
+        .filter(|p| {
+            if cat_filter.is_empty() { return true; }
+            p.categories.iter().any(|c| c.to_lowercase().contains(&cat_filter))
+        })
         .collect();
     products.sort_by(|a, b| b.created_epoch.cmp(&a.created_epoch));
     let total = products.len();

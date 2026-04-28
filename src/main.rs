@@ -4,6 +4,7 @@ mod bonding_curve;
 mod config;
 mod ledger;
 mod models;
+mod notify;
 mod routes;
 mod state;
 

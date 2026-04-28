@@ -273,5 +273,7 @@ pub struct PaginationQuery {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub seller: Option<String>,
+    pub q: Option<String>,
+    pub category: Option<String>,
 }
 
