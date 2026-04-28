@@ -3,7 +3,7 @@ name = "btcpc-market"
 version = "0.1.0"
 edition = "2021"
 description = "BTCPC Market — commerce HTTP service (stores, products, orders, reputation)"
-authors = ["Shin Devlin <shin@btcpc.network>"]
+authors = ["Shin Devlin <shindevlin@proton.me>"]
 
 [[bin]]
 name = "btcpc-market"
